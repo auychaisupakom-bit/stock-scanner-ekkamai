@@ -546,7 +546,7 @@
     position: fixed;
     top: 70px;
     left: 50%;
-    transform: translateX(-50%) translateY(-80px);
+    transform: translateX(-50%) translateY(-160px);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 20px;
@@ -3137,7 +3137,7 @@ function showToast(msg, type='ok') {
   el.className = 'toast ' + type;
   clearTimeout(toastTimer);
   setTimeout(() => el.classList.add('show'), 10);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1500);
 }
 
 // Init
