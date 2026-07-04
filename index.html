@@ -1403,7 +1403,48 @@
     <input type="hidden" id="note-text" value="">
 
     <button class="btn btn-primary" onclick="saveCount()">✅ บันทึกยอดนับ</button>
+    <button type="button" onclick="openTransferDialog()" id="transfer-trigger-btn"
+      style="width:100%;background:rgba(255,215,64,0.08);border:1px solid var(--yellow);border-radius:12px;padding:10px;color:var(--yellow);font-family:'Sarabun',sans-serif;font-size:13px;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;justify-content:center;gap:6px">
+      🚚 <span id="transfer-trigger-label">บันทึก "ส่งคืนคลัง" (ของกำลังเดินทาง)</span>
+    </button>
     <button class="btn btn-ghost" onclick="cancelScan()">← ยกเลิก / ย้อนกลับ</button>
+  </div>
+
+  <!-- Modal Popup สำหรับส่งคืนคลัง (ของกำลังเดินทาง) -->
+  <div id="transfer-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;padding:20px"
+    onclick="if(event.target===this)closeTransferDialog()">
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:20px;max-width:420px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,0.5)">
+      <div style="font-size:18px;font-weight:700;color:var(--yellow);margin-bottom:6px">🚚 ส่งคืนคลังสินค้า</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">บันทึกจำนวนสินค้าที่ "ส่งคืนคลัง" แต่ของยังเดินทาง — ระบบจะคิดยอดต่าง (diff) ใหม่ให้ถูกต้อง</div>
+
+      <div style="background:var(--surface);border-radius:10px;padding:12px;margin-bottom:14px">
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px" id="tm-product">—</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+          <div>ยอดระบบ: <strong style="color:var(--text)" id="tm-system">—</strong></div>
+          <div>นับไปแล้ว: <strong style="color:var(--green)" id="tm-counted">0</strong></div>
+          <div style="grid-column:1/-1">บันทึกส่งคืนเดิม: <strong style="color:var(--yellow)" id="tm-current">0</strong></div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">จำนวนส่งคืนคลัง (กำลังเดินทาง)</div>
+      <input id="tm-input" type="number" min="0" value="0"
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;color:var(--text);font-family:'Sarabun',sans-serif;font-size:18px;font-weight:700;outline:none;margin-bottom:14px;text-align:center">
+
+      <div style="background:rgba(0,212,255,0.06);border:1px dashed var(--accent);border-radius:8px;padding:10px;font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+        💡 <strong style="color:var(--accent)">วิธีคิด:</strong> สมมุติยอดระบบแสดง 20 แต่ของกำลังเดินทางคืนคลัง 10 ชิ้น — กรอก "10" ที่นี่ ระบบจะรู้ว่ายอดที่ควรเจอหน้างานจริงคือ 10 ไม่ใช่ 20
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button type="button" onclick="closeTransferDialog()"
+          style="flex:1;background:transparent;border:1px solid var(--border);border-radius:10px;padding:10px;color:var(--muted);font-family:'Sarabun',sans-serif;font-size:14px;cursor:pointer">
+          ยกเลิก
+        </button>
+        <button type="button" onclick="saveTransfer()"
+          style="flex:2;background:var(--yellow);border:none;border-radius:10px;padding:10px;color:#1a1a1a;font-weight:700;font-family:'Sarabun',sans-serif;font-size:14px;cursor:pointer">
+          🚚 บันทึกส่งคืนคลัง
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- Modal Popup สำหรับใส่หมายเหตุ -->
@@ -1694,6 +1735,94 @@ function syncToFirebase(code, qty, productName, zone, user, noteType, noteText) 
   });
 }
 
+// ── ส่งคืนคลัง (TRANSFER OUT) — ของที่ตัดสต๊อกแล้วแต่ยังเดินทางไป HQ ──
+// เก็บแยกจาก counts ปกติ เพื่อไม่ปนกับยอดที่นับจริงหน้าร้าน
+function syncTransferToFirebase(code, qty, productName) {
+  const ref = db.ref('transfer/' + code.replace(/[.#$/[\]]/g, '_'));
+  if (qty > 0) {
+    ref.set({
+      code, qty,
+      name: productName || '',
+      user: currentUser || '',
+      zone: currentZone || '',
+      updatedAt: Date.now()
+    });
+  } else {
+    ref.remove();
+  }
+}
+
+// ยอดระบบที่ "ควรเจอหน้างานจริง" = ยอดในไฟล์ Excel - ของที่ส่งคืนคลังไปแล้ว (กำลังเดินทาง)
+function getEffectiveSystemQty(code, rawSystemQty) {
+  const sys = parseInt(rawSystemQty);
+  if (isNaN(sys)) return rawSystemQty;
+  const t = transferOut[code] || 0;
+  return sys - t;
+}
+
+function openTransferDialog() {
+  if (!currentProduct || !currentProduct.code) {
+    showToast('เลือกสินค้าก่อนสแกน', 'warn');
+    return;
+  }
+  const code = currentProduct.code;
+  const current = transferOut[code] || 0;
+  const sys = parseInt(currentProduct.systemQty);
+  const counted = counts[code] || 0;
+
+  document.getElementById('tm-product').textContent = currentProduct.name || code;
+  document.getElementById('tm-system').textContent = isNaN(sys) ? '—' : sys;
+  document.getElementById('tm-counted').textContent = counted;
+  document.getElementById('tm-current').textContent = current;
+  document.getElementById('tm-input').value = current;
+  document.getElementById('transfer-modal').style.display = 'flex';
+}
+
+function closeTransferDialog() {
+  document.getElementById('transfer-modal').style.display = 'none';
+}
+
+function saveTransfer() {
+  if (!currentProduct || !currentProduct.code) return;
+  const code = currentProduct.code;
+  const inputEl = document.getElementById('tm-input');
+  const q = parseInt(inputEl.value);
+  if (isNaN(q) || q < 0) {
+    showToast('กรอกตัวเลขที่ถูกต้อง (≥ 0)', 'warn');
+    inputEl.focus();
+    return;
+  }
+  if (q === 0) {
+    delete transferOut[code];
+  } else {
+    transferOut[code] = q;
+  }
+  try { localStorage.setItem('stock_transfer', JSON.stringify(transferOut)); } catch(e) {}
+  syncTransferToFirebase(code, q, currentProduct.name);
+  closeTransferDialog();
+  showToast(q > 0 ? `🚚 บันทึกส่งคืนคลัง ${q} ${currentProduct.category||''}` : 'ล้างยอดส่งคืนคลังแล้ว', 'ok');
+  updateDiff();
+  const listPage = document.getElementById('page-list');
+  if (listPage && listPage.classList.contains('active')) renderList();
+}
+
+// ฟังการเปลี่ยนแปลงยอดส่งคืนคลังจากเครื่องอื่น real-time
+function startTransferListener() {
+  db.ref('transfer').on('value', (snapshot) => {
+    const data = snapshot.val();
+    transferOut = {};
+    if (data) {
+      Object.values(data).forEach(item => {
+        if (item && item.code && item.qty > 0) transferOut[item.code] = item.qty;
+      });
+    }
+    try { localStorage.setItem('stock_transfer', JSON.stringify(transferOut)); } catch(e) {}
+    if (currentProduct && currentProduct.code) updateDiff();
+    const listPage = document.getElementById('page-list');
+    if (listPage && listPage.classList.contains('active')) renderList();
+  });
+}
+
 // ฟังการเปลี่ยนแปลงจากคนอื่น real-time
 function startFirebaseListener() {
   db.ref('counts').on('value', (snapshot) => {
@@ -1750,9 +1879,11 @@ let selectedZoneChip = '';
 let mergeFiles = [];
 let mergedData = [];
 let unknownCounts = {};
+let transferOut = {};  // { code: qty } - สินค้าที่ "ส่งคืนคลัง" (ของกำลังเดินทาง)
 try { const u2 = localStorage.getItem('stock_unknown'); if(u2) unknownCounts = JSON.parse(u2); } catch(e) {}
 try { const n2 = localStorage.getItem('stock_notes'); if(n2) notes = JSON.parse(n2); } catch(e) {}
 try { const m2 = localStorage.getItem('stock_meta'); if(m2) countMeta = JSON.parse(m2); } catch(e) {}
+try { const t2 = localStorage.getItem('stock_transfer'); if(t2) transferOut = JSON.parse(t2); } catch(e) {}
 
 // Load from localStorage
 try {
@@ -1867,6 +1998,7 @@ function startApp() {
   document.getElementById('topbar-sub-text').textContent = 'Handheld Scanner';
   updateBadge();
   startFirebaseListener();
+  startTransferListener();
   updateOnlineStatus();
 }
 
@@ -1879,6 +2011,7 @@ if (currentUser && currentZone) {
   document.getElementById('banner-name').textContent = currentUser;
   document.getElementById('banner-zone').textContent = currentZone;
   startFirebaseListener();
+  startTransferListener();
   updateOnlineStatus();
 }
 
@@ -2359,16 +2492,24 @@ function lookupCode(code) {
 function updateDiff() {
   if (!currentProduct) return;
   const qty = parseInt(document.getElementById('qty-input').value) || 0;
-  const sys = parseInt(currentProduct.systemQty);
+  const rawSys = parseInt(currentProduct.systemQty);
   const el  = document.getElementById('diff-display');
 
-  if (isNaN(sys)) { el.innerHTML = ''; return; }
+  if (isNaN(rawSys)) { el.innerHTML = ''; return; }
 
-  const diff = qty - sys;
+  // หักของที่ส่งคืนคลัง (กำลังเดินทาง) ออกจากยอดระบบก่อนเทียบ
+  const code = currentProduct.code;
+  const tOut = transferOut[code] || 0;
+  const effectiveSys = rawSys - tOut;
+  const diff = qty - effectiveSys;
   let cls = diff === 0 ? 'diff-ok' : (Math.abs(diff) <= 2 ? 'diff-warn' : 'diff-err');
   let icon = diff === 0 ? '✅' : (diff > 0 ? '📈' : '📉');
   let label = diff === 0 ? 'ยอดตรง' : (diff > 0 ? `เกิน ${diff} ชิ้น` : `ขาด ${Math.abs(diff)} ชิ้น`);
-  el.innerHTML = `<div class="diff-badge ${cls}">${icon} ${label} (${diff > 0 ? '+' : ''}${diff})</div>`;
+  const transferNote = tOut > 0 ? `<div style="font-size:11px;color:var(--yellow);margin-top:4px">🚚 ส่งคืนคลัง ${tOut} ชิ้น — ยอดที่ควรเจอหน้างาน = ${effectiveSys}</div>` : '';
+  el.innerHTML = `<div class="diff-badge ${cls}">${icon} ${label} (${diff > 0 ? '+' : ''}${diff})</div>${transferNote}`;
+
+  const trBtn = document.getElementById('transfer-trigger-label');
+  if (trBtn) trBtn.textContent = tOut > 0 ? `บันทึก "ส่งคืนคลัง" — ปัจจุบัน ${tOut} ชิ้น` : 'บันทึก "ส่งคืนคลัง" (ของกำลังเดินทาง)';
 }
 
 function adjustQty(delta) {
@@ -2413,7 +2554,9 @@ function saveCount() {
     save();
     // sync ขึ้น Firebase real-time
     syncToFirebase(code, qty, currentProduct.name, currentZone, currentUser, noteType, noteText);
-    const diff = isNaN(parseInt(currentProduct.systemQty)) ? null : qty - parseInt(currentProduct.systemQty);
+    const rawSys = parseInt(currentProduct.systemQty);
+    const effSys = isNaN(rawSys) ? NaN : getEffectiveSystemQty(code, rawSys);
+    const diff = isNaN(effSys) ? null : qty - effSys;
     if (diff === null) showToast('💾 บันทึกแล้ว', 'ok');
     else if (diff === 0) showToast('✅ ยอดตรง! บันทึกแล้ว', 'ok');
     else showToast(`⚠️ ต่าง ${diff > 0 ? '+' : ''}${diff} ชิ้น — บันทึกแล้ว`, 'warn');
@@ -2619,7 +2762,8 @@ function renderList() {
   items = items.filter(p => {
     const matchQ  = !q || p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
     const counted = counts[p.code] !== undefined;
-    const diff    = counted && !isNaN(parseInt(p.systemQty)) ? counts[p.code] - parseInt(p.systemQty) : null;
+    const effSys  = isNaN(parseInt(p.systemQty)) ? NaN : getEffectiveSystemQty(p.code, p.systemQty);
+    const diff    = counted && !isNaN(effSys) ? counts[p.code] - effSys : null;
     const matchF  = fil === 'all'
       || (fil === 'ok'        && diff === 0)
       || (fil === 'diff'      && diff !== null && diff !== 0)
@@ -2665,8 +2809,13 @@ function renderList() {
         ${showingItems.map(p => {
           const cnt  = counts[p.code];
           const sys  = parseInt(p.systemQty);
-          const diff = (cnt !== undefined && !isNaN(sys)) ? cnt - sys : null;
+          const tOut = transferOut[p.code] || 0;
+          const effSys = isNaN(sys) ? sys : getEffectiveSystemQty(p.code, sys);
+          const diff = (cnt !== undefined && !isNaN(effSys)) ? cnt - effSys : null;
           const dc   = diff === null ? 'd-none' : diff === 0 ? 'd-ok' : Math.abs(diff) <= 2 ? 'd-warn' : 'd-err';
+          const transferIcon = tOut > 0
+            ? `<span title="ส่งคืนคลัง ${tOut} ชิ้น" style="display:inline-block;color:var(--yellow);font-size:11px;margin-left:4px">🚚${tOut}</span>`
+            : '';
           const batches = (typeof BATCHES_MAP !== 'undefined') ? BATCHES_MAP[p.code] : null;
           const hasBatches = batches && batches.length > 0;
           const safeId = `batch-${p.code.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -2688,10 +2837,11 @@ function renderList() {
             ? `<span title="${note.type || ''}: ${(note.text || '').replace(/"/g, '&quot;')}" style="display:inline-block;color:#ff9533;font-size:11px;margin-left:4px">📝</span>`
             : '';
 
+          const sysCellText = isNaN(sys) ? '—' : (tOut > 0 ? `${effSys}<span style="color:var(--muted);font-size:9px"> (${sys})</span>` : sys);
           return `<tr onclick="editCount('${p.code}')" style="cursor:pointer">
             <td class="code-cell">${p.code}</td>
-            <td style="font-size:12px">${p.name || '—'}${noteIcon}${expandIcon}</td>
-            <td class="counted-cell" style="text-align:right">${isNaN(sys) ? '—' : sys}</td>
+            <td style="font-size:12px">${p.name || '—'}${noteIcon}${expandIcon}${transferIcon}</td>
+            <td class="counted-cell" style="text-align:right">${sysCellText}</td>
             <td class="counted-cell" style="text-align:right">${cnt !== undefined ? cnt : '<span style="color:var(--muted)">—</span>'}</td>
             <td class="diff-cell ${dc}" style="text-align:right">${diff !== null ? (diff > 0 ? '+' : '') + diff : '—'}</td>
           </tr>${batchRows}`;
@@ -2814,11 +2964,12 @@ function renderSummary() {
 
   products.forEach(p => {
     const cnt = counts[p.code];
-    const sys = parseInt(p.systemQty);
-    if (cnt !== undefined && !isNaN(sys)) {
-      const d = cnt - sys;
+    const rawSys = parseInt(p.systemQty);
+    const effSys = isNaN(rawSys) ? rawSys : getEffectiveSystemQty(p.code, rawSys);
+    if (cnt !== undefined && !isNaN(effSys)) {
+      const d = cnt - effSys;
       if (d === 0) ok++;
-      else { diff++; diffRows.push({ ...p, counted: cnt, diff: d }); }
+      else { diff++; diffRows.push({ ...p, systemQty: effSys, rawSystemQty: rawSys, counted: cnt, diff: d }); }
     }
   });
 
@@ -2835,10 +2986,12 @@ function renderSummary() {
         <tr><th>รหัส</th><th>ชื่อ</th><th>ระบบ</th><th>นับ</th><th>ต่าง</th></tr>
         ${diffRows.map(p => {
           const dc = Math.abs(p.diff) <= 2 ? 'd-warn' : 'd-err';
+          const tOut = transferOut[p.code] || 0;
+          const sysLabel = tOut > 0 ? `${p.systemQty}<span style="color:var(--muted);font-size:9px"> (${p.rawSystemQty})</span> 🚚` : p.systemQty;
           return `<tr>
             <td class="code-cell">${p.code}</td>
             <td style="font-size:12px">${p.name}</td>
-            <td class="counted-cell" style="text-align:right">${p.systemQty}</td>
+            <td class="counted-cell" style="text-align:right">${sysLabel}</td>
             <td class="counted-cell" style="text-align:right">${p.counted}</td>
             <td class="diff-cell ${dc}" style="text-align:right">${p.diff > 0 ? '+' : ''}${p.diff}</td>
           </tr>`;
@@ -2915,11 +3068,13 @@ function exportCSV() {
     'other': 'อื่นๆ',
   };
 
-  let rows = [['รหัสสินค้า','ชื่อสินค้า','หมวดหมู่','ยอดระบบ','ยอดนับ','ผลต่าง','สถานะ','โซน','ผู้นับ','ประเภทหมายเหตุ','รายละเอียดหมายเหตุ']];
+  let rows = [['รหัสสินค้า','ชื่อสินค้า','หมวดหมู่','ยอดระบบ(Excel)','ส่งคืนคลัง','ยอดที่ควรเจอ','ยอดนับ','ผลต่าง','สถานะ','โซน','ผู้นับ','ประเภทหมายเหตุ','รายละเอียดหมายเหตุ']];
   products.forEach(p => {
     const cnt  = counts[p.code];
-    const sys  = parseInt(p.systemQty);
-    const diff = (cnt !== undefined && !isNaN(sys)) ? cnt - sys : '';
+    const rawSys = parseInt(p.systemQty);
+    const tOut = transferOut[p.code] || 0;
+    const effSys = isNaN(rawSys) ? rawSys : getEffectiveSystemQty(p.code, rawSys);
+    const diff = (cnt !== undefined && !isNaN(effSys)) ? cnt - effSys : '';
     const status = diff === '' ? 'ยังไม่นับ' : diff === 0 ? 'ตรง' : diff > 0 ? 'เกิน' : 'ขาด';
     const note = notes[p.code] || {};
     const noteTypeLabelStr = noteTypeLabel[note.type || ''] || note.type || '';
@@ -2934,7 +3089,7 @@ function exportCSV() {
       rowZone = meta.zone || '';
       rowUser = meta.user || '';
     }
-    rows.push([p.code, p.name, p.category, isNaN(sys) ? '' : sys, cnt ?? '', diff, status, rowZone, rowUser, noteTypeLabelStr, noteTextStr]);
+    rows.push([p.code, p.name, p.category, isNaN(rawSys) ? '' : rawSys, tOut || '', isNaN(effSys) ? '' : effSys, cnt ?? '', diff, status, rowZone, rowUser, noteTypeLabelStr, noteTextStr]);
   });
 
   // CSV escape: ใส่ "..." รอบทุกค่า กัน comma ในข้อความ
