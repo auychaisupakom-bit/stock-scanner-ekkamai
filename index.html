@@ -1753,25 +1753,48 @@ function dismissNewRoundPrompt() {
 }
 
 function confirmNewRoundReset() {
-  if (!confirm('⚠️ ยืนยันล้างยอดนับทั้งหมดเพื่อเริ่มรอบนับใหม่?\n\nยอดนับปัจจุบันทั้งหมดจะถูกลบทิ้ง (ทั้งในเครื่องนี้และที่ Firebase กลาง)\nรวมถึงยอด "ส่งคืนคลัง" ที่บันทึกไว้ด้วย\nชื่อผู้นับ/โซน จะยังเก็บไว้\n\nการกระทำนี้ย้อนกลับไม่ได้')) {
+  if (!confirm('⚠️ ยืนยันล้างยอดนับทั้งหมดเพื่อเริ่มรอบนับใหม่?\n\nยอดนับปัจจุบันทั้งหมดจะถูกลบทิ้ง (ทั้งในเครื่องนี้และที่ Firebase กลาง)\nรวมถึงยอด "ส่งคืนคลัง" ที่บันทึกไว้ด้วย\nชื่อผู้นับ/โซน จะยังเก็บไว้\n\n⚠️ ถ้าเครื่องอื่นเริ่มรอบใหม่ไปแล้วก่อนหน้านี้ ระบบจะไม่ลบซ้ำ แค่ดึงข้อมูลล่าสุดมาให้แทน (กันข้อมูลที่นับไปแล้วหาย)\n\nการกระทำนี้ย้อนกลับไม่ได้')) {
     return;
   }
-  try {
-    ['stock_counts','stock_notes','stock_meta','stock_unknown','stock_products','stock_transfer'].forEach(k => {
-      try { localStorage.removeItem(k); } catch(e) {}
-    });
-    try { db.ref('counts').remove(); } catch(e) {}
-    try { db.ref('transfer').remove(); } catch(e) {}
-    localStorage.setItem('stock_round', STOCKTAKE_ROUND);
-    pendingNewRound = false;
-    const banner = document.getElementById('new-round-banner');
-    if (banner) banner.remove();
-    showToast('🔄 เริ่มรอบนับใหม่แล้ว', 'ok');
-    setTimeout(() => location.reload(), 1000);
-  } catch(e) {
-    console.error('reset error:', e);
-    showToast('เกิดข้อผิดพลาด ลองใหม่อีกครั้ง', 'warn');
-  }
+  // ใช้ Firebase transaction เป็น "กรรมการกลาง" — มีแค่เครื่องแรกที่กดเท่านั้นที่จะลบข้อมูลได้จริง
+  // เครื่องอื่นที่กดซ้ำทีหลัง (แม้จะเห็นป้ายเหลืองของตัวเองค้างอยู่) จะไม่ไปลบยอดที่เครื่องแรกนับไปแล้วในรอบใหม่
+  db.ref('meta/lastResetRound').transaction((current) => {
+    if (current === STOCKTAKE_ROUND) {
+      return; // undefined = ยกเลิก transaction — แปลว่ามีคนรีเซ็ตรอบนี้ไปแล้ว ไม่เขียนทับ
+    }
+    return STOCKTAKE_ROUND; // ยังไม่มีใครรีเซ็ตรอบนี้ → เคลมสิทธิ์เป็นคนแรก
+  }, (error, committed) => {
+    if (error) {
+      console.error('transaction error:', error);
+      showToast('เกิดข้อผิดพลาด ลองใหม่อีกครั้ง', 'warn');
+      return;
+    }
+    try {
+      if (committed) {
+        // เป็นคนแรกที่กดสำหรับรอบนี้ → ลบข้อมูลจริง
+        try { db.ref('counts').remove(); } catch(e) {}
+        try { db.ref('transfer').remove(); } catch(e) {}
+        ['stock_counts','stock_notes','stock_meta','stock_unknown','stock_products','stock_transfer'].forEach(k => {
+          try { localStorage.removeItem(k); } catch(e) {}
+        });
+        showToast('🔄 เริ่มรอบนับใหม่แล้ว', 'ok');
+      } else {
+        // มีเครื่องอื่นรีเซ็ตรอบนี้ไปก่อนแล้ว → ไม่ลบซ้ำ แค่ดึงข้อมูลล่าสุดจาก Firebase มาแทน (กันข้อมูลที่เครื่องอื่นนับไปแล้วหาย)
+        ['stock_counts','stock_notes','stock_meta','stock_unknown','stock_transfer'].forEach(k => {
+          try { localStorage.removeItem(k); } catch(e) {}
+        });
+        showToast('ℹ️ รอบนี้เริ่มไปแล้วโดยเครื่องอื่น — ดึงข้อมูลล่าสุดให้แทนการลบซ้ำ', 'warn');
+      }
+      localStorage.setItem('stock_round', STOCKTAKE_ROUND);
+      pendingNewRound = false;
+      const banner = document.getElementById('new-round-banner');
+      if (banner) banner.remove();
+      setTimeout(() => location.reload(), 1200);
+    } catch(e) {
+      console.error('reset error:', e);
+      showToast('เกิดข้อผิดพลาด ลองใหม่อีกครั้ง', 'warn');
+    }
+  });
 }
 
 // sync counts ขึ้น Firebase
