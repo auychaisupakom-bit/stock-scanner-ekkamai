@@ -1361,6 +1361,12 @@
       <div class="expiry-detail" id="r-expiry-detail">—</div>
     </div>
 
+    <!-- แจ้งเตือนสินค้าชื่อใกล้เคียง (เสี่ยงนับซ้ำ/นับข้าม) -->
+    <div id="r-similar-banner" style="display:none;background:rgba(255,82,82,0.10);border:1px solid rgba(255,82,82,0.4);border-radius:12px;padding:10px 14px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px">🔔 มีสินค้าชื่อใกล้เคียง อย่าลืมนับอีกชิ้น!</div>
+      <div id="r-similar-detail" style="font-size:12px;color:var(--text)">—</div>
+    </div>
+
     <!-- แจ้งเตือนเมื่อสินค้านี้ถูกนับไปแล้ว -->
     <div id="r-already-counted" style="display:none;background:rgba(255,215,64,0.08);border:1px solid rgba(255,215,64,0.4);border-radius:12px;padding:10px 14px;margin-bottom:12px">
       <div style="font-size:12px;font-weight:700;color:var(--yellow);margin-bottom:4px">⚠️ รายการนี้นับไปแล้ว!</div>
@@ -2354,6 +2360,37 @@ function checkExpiryBanner(sku) {
 }
 
 // ─────────────────────────────────────────
+// เตือนสินค้าชื่อใกล้เคียง (เสี่ยงนับซ้ำ/นับข้าม)
+// เช่น "NAC LONG 600 MG" มี 2 รหัส (12xxx, 14xxx) คนละ SKU
+// ─────────────────────────────────────────
+const SIMILAR_NAMES_MAP = {"120100160011": [{"sku": "140100161011", "name": "NAC LONG  600 MG  1X10 TAB"}], "140100161011": [{"sku": "120100160011", "name": "NAC LONG  600 MG  1X10 TAB"}], "120105630011": [{"sku": "140105630011", "name": "TANSY ONE 1 TAB"}], "140105630011": [{"sku": "120105630011", "name": "TANSY ONE 1 TAB"}], "120421060011": [{"sku": "140421060011", "name": "PROPOLIZ MOUTH SPRAY 15 ML"}], "140421060011": [{"sku": "120421060011", "name": "PROPOLIZ MOUTH SPRAY 15 ML"}]};
+
+function checkSimilarNameWarning(sku) {
+  const banner   = document.getElementById('r-similar-banner');
+  const detailEl = document.getElementById('r-similar-detail');
+  if (!banner || !detailEl) return;
+  banner.style.display = 'none';
+
+  const matches = SIMILAR_NAMES_MAP[sku];
+  if (!matches || !matches.length) return;
+
+  // เช็คสถานะการนับของตัวที่ใกล้เคียง (นับไปแล้วหรือยัง)
+  detailEl.innerHTML = matches.map(m => {
+    const otherCount = counts[m.sku];
+    const statusTxt = otherCount !== undefined
+      ? `<span style="color:var(--green)">✅ นับแล้ว ${otherCount}</span>`
+      : `<span style="color:var(--red);font-weight:700">❌ ยังไม่นับ!</span>`;
+    return `📦 <code style="font-size:11px">${m.sku}</code> "${m.name}" — ${statusTxt}`;
+  }).join('<br>');
+  banner.style.display = 'block';
+
+  // ถ้ามีตัวใกล้เคียงที่ "ยังไม่นับ" ให้เด้ง popup toast เด่นชัดด้วย
+  if (matches.some(m => counts[m.sku] === undefined)) {
+    showToast('🔔 มีสินค้าชื่อใกล้เคียง อย่าลืมนับอีกชิ้น!', 'warn');
+  }
+}
+
+// ─────────────────────────────────────────
 // CAMERA / SCANNER (html5-qrcode)
 // ─────────────────────────────────────────
 let html5Scanner = null;
@@ -2564,6 +2601,9 @@ function lookupCode(code) {
 
   // เช็ควันหมดอายุ
   checkExpiryBanner(lookupKey);
+
+  // เช็คสินค้าที่ชื่อใกล้เคียง - เสี่ยงนับซ้ำ/นับข้ามไป
+  checkSimilarNameWarning(lookupKey);
 
   // เช็ค Firebase ว่ามีคนนับไปแล้วไหม
   db.ref('counts/' + lookupKey.replace(/[.#$/[\]]/g, '_')).once('value', (snap) => {
