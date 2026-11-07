@@ -1720,8 +1720,10 @@ const db = firebase.database();
 const STOCKTAKE_ROUND = '2026-11-07-ekkamai';
 
 // ── รายการส่งคืนคลังที่ยืนยันแล้ว (ใบส่งคืน 31-7-26) — seed ให้อัตโนมัติครั้งเดียวต่อรอบ ──
-const INITIAL_TRANSFER_OUT = {};
-const TRANSFER_SEED_LABEL = 'ระบบ (นำเข้าจากใบส่งคืน พ.ย. 2026)';
+const INITIAL_TRANSFER_OUT = {"141018691003": 12, "110116630111": 10, "140116631011": 1, "110100570122": 50, "140419950012": 1, "140413111011": 1, "140717600313": 1, "140408021201": 2, "140714020112": 4, "140714020111": 4, "140220091011": 1, "140106610011": 2, "140110390021": 3, "140110360021": 3, "140717111103": 10, "140118691002": 1};
+const TRANSFER_SEED_LABEL = 'ระบบ (ใบส่งคืน STS-0029-26-3545 วันที่ 6 พ.ย. 2026)';
+// รหัสชุดยอดส่งคืน — ใส่ให้ครั้งเดียวต่อรหัสนี้ ถ้ามีใบส่งคืนเพิ่มกลางรอบ ให้เปลี่ยนรหัสต่อท้ายเป็นเลขใบใหม่
+const TRANSFER_SEED_KEY = STOCKTAKE_ROUND + '#STS-0029-26-3545';
 // เขียนยอดส่งคืนคลังที่ยืนยันแล้วของรอบนี้ลง Firebase — เรียกจากใน confirmNewRoundReset()
 // เท่านั้น (จังหวะที่เพิ่งล้าง 'transfer' ทิ้งไปสดๆ) จึงไม่ต้องมี transaction guard ของตัวเอง
 // การมี guard ซ้อนอีกชั้นเคยทำให้ seed ของเดือนใหม่ไปชนกับของเดือนเก่าที่ยังไม่ถูกล้าง (ก่อนกดเริ่มรอบใหม่)
@@ -1737,6 +1739,24 @@ function seedTransferItems() {
     });
   });
   console.log('🚚 Seeded', Object.keys(INITIAL_TRANSFER_OUT).length, 'initial transfer-out items for round', STOCKTAKE_ROUND);
+}
+// ใส่ยอดส่งคืนคลังกลางรอบ (รอบนับเริ่มไปแล้ว) โดยไม่แตะยอดที่นับไปแล้ว
+// - ทำเฉพาะเมื่อรอบนี้ถูกกด "เริ่มรอบใหม่" ไปแล้ว (ถ้ายังไม่เริ่ม ปุ่มเริ่มรอบใหม่จะใส่ให้เอง)
+// - ใส่ครั้งเดียวต่อ TRANSFER_SEED_KEY (transaction กันหลายเครื่องใส่ซ้ำ/ทับยอดที่แก้มือทีหลัง)
+function seedTransfersIfRoundStarted() {
+  db.ref('meta/lastResetRound').once('value', (snap) => {
+    if (snap.val() !== STOCKTAKE_ROUND) return;
+    db.ref('meta/transferSeed').transaction((current) => {
+      if (current === TRANSFER_SEED_KEY) return; // ใส่ไปแล้ว
+      return TRANSFER_SEED_KEY;
+    }, (error, committed) => {
+      if (error) { console.error('transfer seed error:', error); return; }
+      if (committed) {
+        seedTransferItems();
+        showToast('🚚 ใส่ยอดส่งคืนคลัง ' + Object.keys(INITIAL_TRANSFER_OUT).length + ' รายการแล้ว', 'ok');
+      }
+    });
+  });
 }
 let pendingNewRound = false;
 (function checkForNewRound() {
@@ -1798,7 +1818,7 @@ function confirmNewRoundReset() {
         // (ทำใน branch เดียวกัน ป้องกันไม่ให้มีช่วงเวลาที่ของเดือนก่อนยังไม่ถูกล้างไปปนกับของรอบใหม่)
         try { db.ref('counts').remove(); } catch(e) {}
         try { db.ref('transfer').remove(); } catch(e) {}
-        try { seedTransferItems(); } catch(e) { console.error('seed error:', e); }
+        try { seedTransferItems(); db.ref('meta/transferSeed').set(TRANSFER_SEED_KEY); } catch(e) { console.error('seed error:', e); }
         ['stock_counts','stock_notes','stock_meta','stock_unknown','stock_products','stock_transfer'].forEach(k => {
           try { localStorage.removeItem(k); } catch(e) {}
         });
@@ -2103,6 +2123,7 @@ function startApp() {
   updateBadge();
   startFirebaseListener();
   startTransferListener();
+  seedTransfersIfRoundStarted();
   updateOnlineStatus();
   showNewRoundPrompt();
 }
@@ -2117,6 +2138,7 @@ if (currentUser && currentZone) {
   document.getElementById('banner-zone').textContent = currentZone;
   startFirebaseListener();
   startTransferListener();
+  seedTransfersIfRoundStarted();
   updateOnlineStatus();
   showNewRoundPrompt();
 }
