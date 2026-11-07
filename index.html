@@ -1386,13 +1386,6 @@
       <div class="meta-pill">ระบบ: <span id="r-sys">—</span></div>
     </div>
 
-    <!-- บังคับยืนยันเห็นของจริง - แสดงเฉพาะ SKU ที่ยอดระบบน้อย (เสี่ยงถูกมองข้าม/สแกนจากป้ายชั้นแทนตัวสินค้าจริง) -->
-    <div id="r-lowqty-confirm" style="display:none;background:rgba(255,82,82,0.08);border:1px dashed var(--red);border-radius:10px;padding:10px 12px;margin-bottom:12px">
-      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;color:var(--text);line-height:1.4">
-        <input type="checkbox" id="lowqty-confirm-checkbox" style="width:19px;height:19px;flex-shrink:0;margin-top:1px;cursor:pointer" onchange="updateSaveButtonState()">
-        <span>✋ <strong>สินค้านี้เหลือน้อยในระบบ</strong> — ยืนยันว่าคุณเห็น<strong>ของจริงอยู่ตรงหน้า</strong> ไม่ได้สแกนจากป้ายชั้นเฉยๆ (ต้องติ๊กก่อนถึงจะบันทึกได้)</span>
-      </label>
-    </div>
 
     <div class="qty-row">
       <div class="qty-label">ยอดนับ</div>
@@ -1870,23 +1863,6 @@ function getEffectiveSystemQty(code, rawSystemQty) {
   return sys - t;
 }
 
-// ── บังคับยืนยันเห็นของจริง สำหรับ SKU ที่ยอดระบบเหลือน้อย ──
-// ป้องกันการสแกนป้ายชั้น/กดผ่านเลขที่ระบบเติมให้โดยไม่ได้ตรวจของจริง
-// (ที่มา: เคส KSG PLAST W1 หายจากชั้นแต่ไม่มีใครจับได้นาน 4 เดือน)
-const LOW_QTY_CONFIRM_THRESHOLD = 2;
-
-function updateSaveButtonState() {
-  const banner = document.getElementById('r-lowqty-confirm');
-  const saveBtn = document.getElementById('save-count-btn');
-  if (!banner || !saveBtn) return;
-  const needsConfirm = banner.style.display !== 'none';
-  const checkbox = document.getElementById('lowqty-confirm-checkbox');
-  const confirmed = checkbox ? checkbox.checked : true;
-  const blocked = needsConfirm && !confirmed;
-  saveBtn.disabled = blocked;
-  saveBtn.style.opacity = blocked ? '0.45' : '1';
-  saveBtn.style.cursor = blocked ? 'not-allowed' : 'pointer';
-}
 
 function openTransferDialog() {
   if (!currentProduct || !currentProduct.code) {
@@ -2639,18 +2615,6 @@ function lookupCode(code) {
   // เช็คสินค้าที่ชื่อใกล้เคียง - เสี่ยงนับซ้ำ/นับข้ามไป
   checkSimilarNameWarning(lookupKey);
 
-  // เช็คว่าเป็น SKU ยอดน้อย (เสี่ยงถูกมองข้าม) - ถ้าใช่ บังคับติ๊กยืนยันก่อนบันทึกได้
-  const lowQtyBanner = document.getElementById('r-lowqty-confirm');
-  const lowQtyCheckbox = document.getElementById('lowqty-confirm-checkbox');
-  if (lowQtyCheckbox) lowQtyCheckbox.checked = false; // รีเซ็ตทุกครั้งที่สแกนสินค้าใหม่
-  if (lowQtyBanner) {
-    const rawSys = parseInt(currentProduct.systemQty);
-    const effSys = isNaN(rawSys) ? NaN : getEffectiveSystemQty(lookupKey, rawSys);
-    const needsConfirm = !isUnknown && !isNaN(effSys) && effSys <= LOW_QTY_CONFIRM_THRESHOLD;
-    lowQtyBanner.style.display = needsConfirm ? 'block' : 'none';
-  }
-  updateSaveButtonState();
-
   // เช็ค Firebase ว่ามีคนนับไปแล้วไหม
   db.ref('counts/' + lookupKey.replace(/[.#$/[\]]/g, '_')).once('value', (snap) => {
     const data = snap.val();
@@ -2707,13 +2671,6 @@ function adjustQty(delta) {
 function saveCount() {
   if (!currentProduct) return;
 
-  // กันสำรอง เผื่อปุ่ม disabled หลุด - ถ้าต้องยืนยันเห็นของจริงแต่ยังไม่ติ๊ก ห้ามบันทึก
-  const lowQtyBanner = document.getElementById('r-lowqty-confirm');
-  const lowQtyCheckbox = document.getElementById('lowqty-confirm-checkbox');
-  if (lowQtyBanner && lowQtyBanner.style.display !== 'none' && lowQtyCheckbox && !lowQtyCheckbox.checked) {
-    showToast('✋ กรุณาติ๊กยืนยันว่าเห็นของจริงก่อนบันทึก', 'warn');
-    return;
-  }
 
   const qty = parseInt(document.getElementById('qty-input').value) || 0;
   const noteType = document.getElementById('note-type')?.value || '';
